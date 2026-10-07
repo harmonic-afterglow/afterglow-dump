@@ -90,6 +90,7 @@ class Window(QWidget):
         layout.addWidget(self.status)
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
+        self.progress.setTextVisible(False)      # Windows keeps room for one otherwise
         self.progress.setVisible(False)
         layout.addWidget(self.progress)
 
