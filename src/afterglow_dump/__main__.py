@@ -43,10 +43,8 @@ def main(argv=None) -> int:
                       if flag in argv)
         extra += tuple(argv[argv.index("--name") + 1].split()) if "--name" in argv else ()
         result = clean.make_shareable(source, target, extra)
-        for line in result.removed:
+        for line in result.lines() or ["nothing was found"]:
             print(f"Removed: {line}")
-        if result.found_elsewhere:
-            print(f"Also replaced in {result.found_elsewhere} other places")
         if not result.known_format:
             print("This remote's format is not fully known: check before sharing.")
         print(f"Saved {target}")

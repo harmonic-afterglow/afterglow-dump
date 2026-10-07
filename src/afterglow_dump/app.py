@@ -26,9 +26,9 @@ from . import __version__, access, clean, concord
 
 TITLE = "Afterglow Dump"
 UNKNOWN_FORMAT = (
-    "This remote's format is not fully known, so Afterglow Dump searched the whole file "
-    "for your name, ID and email addresses{found}. It cannot promise it found every "
-    "place they are kept - check with the person you share it with first.")
+    "Afterglow Dump did not find your details where it knows to look, so it searched the "
+    "whole file instead. It cannot promise it found every place they are kept - check "
+    "with the person you share it with first.")
 
 
 def _hint(text: str) -> QLabel:
@@ -177,14 +177,13 @@ class Window(QWidget):
             QMessageBox.critical(self, TITLE, str(exc))
             return
         self.status.setText(f"Saved {Path(target).name}.")
+        removed = "\n".join(f"- {line}" for line in result.lines()) or "- Nothing was found"
         if result.known_format:
-            removed = result.removed or ["Nothing personal was found"]
-            QMessageBox.information(self, TITLE, "Removed from the copy:\n\n- "
-                                    + "\n- ".join(removed) + "\n\nIt is safe to share.")
+            QMessageBox.information(self, TITLE, f"Removed from the copy:\n\n{removed}"
+                                    "\n\nIt is safe to share.")
         else:
-            found = (f" and replaced it in {result.found_elsewhere} places"
-                     if result.found_elsewhere else ", and found none")
-            QMessageBox.warning(self, TITLE, UNKNOWN_FORMAT.format(found=found))
+            QMessageBox.warning(self, TITLE, f"Removed from the copy:\n\n{removed}\n\n"
+                                + UNKNOWN_FORMAT)
 
 
 def main():

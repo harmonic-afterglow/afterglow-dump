@@ -59,8 +59,10 @@ def test_names_ids_and_emails_go_and_everything_else_stays(tmp_path):
 
     result = removed
     assert result.known_format
-    assert {"Your Logitech account ID", "Your first name", "Your last name"} <= set(
-        result.removed)
+    assert result.removed["4815162342"] == "Logitech account ID"
+    assert result.removed["Ada"] == "First name"
+    assert result.removed["ada@example.org"] == "Email"
+    assert "First name: Ada" in result.lines()
     header, payload = clean._split(target.read_bytes())
     text = zipfile.ZipFile(io.BytesIO(payload)).read(clean.USER_CONFIG).decode()
     outside_equipment = text.replace("<Manufacturer>Lovelace</Manufacturer>", "")

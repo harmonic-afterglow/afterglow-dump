@@ -15,12 +15,12 @@ from __future__ import annotations
 import io
 import re
 import zipfile
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
 USER_CONFIG = "userconfig/UserConfiguration.xml"
-OWNER = {"Id": "Your Logitech account ID", "FirstName": "Your first name",
-         "LastName": "Your last name"}
+OWNER = {"Id": "Logitech account ID", "FirstName": "First name", "LastName": "Last name"}
 PERSONAL_TAGS = ("FirstName", "LastName", "FullName", "UserName", "OwnerName", "Email",
                  "EMail", "EmailAddress", "Phone", "PhoneNumber", "Address", "Street",
                  "City", "PostalCode", "ZipCode", "UserId", "AccountId", "LoginName")
@@ -37,9 +37,18 @@ class NotShareable(ValueError):
 
 @dataclass
 class Result:
-    removed: list[str] = field(default_factory=list)
-    found_elsewhere: int = 0            # extra matches the byte search replaced
+    removed: dict[str, str] = field(default_factory=dict)   # the text removed -> what it is
+    places: Counter = field(default_factory=Counter)         # the text removed -> how often
+    found_elsewhere: int = 0            # matches the whole-file search replaced
     known_format: bool = False          # found the owner in a known location
+
+    def lines(self) -> list[str]:
+        """What was removed, as the person would read it: "First name: Ada (3 places)"."""
+        out = []
+        for value, what in self.removed.items():
+            count = self.places[value]
+            out.append(f"{what}: {value}" + (f" ({count} places)" if count > 1 else ""))
+        return out
 
 
 def _split(raw: bytes) -> tuple[bytes, bytes]:
@@ -69,7 +78,7 @@ def _blank(value: str) -> bool:
     return not value.strip() or set(value.strip()) <= {"x"} or set(value.strip()) <= {"0"}
 
 
-def _structured(text: str, secrets: set[str], removed: list[str]):
+def _structured(text: str, secrets: set[str], result: Result):
     """Clear the known personal fields of one XML file, remembering their values."""
     # The owner block; from the end, so earlier positions stay valid.
     for block in reversed(list(re.finditer(r"<User>.*?</User>", text, re.DOTALL))):
@@ -77,17 +86,22 @@ def _structured(text: str, secrets: set[str], removed: list[str]):
         for tag, label in OWNER.items():
             found = re.search(rf"<{tag}>([^<]*)</{tag}>", user)
             if found and not _blank(found.group(1)):
-                secrets.add(found.group(1).strip())
+                value = found.group(1).strip()
+                secrets.add(value)
+                result.removed.setdefault(value, label)
+                result.places[value] += 1
                 filler = _filler(found.group(1), "0" if tag == "Id" else "x")
                 user = user.replace(found.group(0), f"<{tag}>{filler}</{tag}>", 1)
-                removed.append(label)
         text = text[:block.start()] + user + text[block.end():]
 
     def clear(match):
         if _blank(match.group(2)):
             return match.group(0)
-        secrets.add(match.group(2).strip())
-        removed.append(f"A {match.group(1)} field")
+        value = match.group(2).strip()
+        secrets.add(value)
+        result.removed.setdefault(value, re.sub(r"(?<=[a-z])(?=[A-Z])", " ",
+                                                match.group(1)).capitalize())
+        result.places[value] += 1
         return f"<{match.group(1)}>{_filler(match.group(2))}</{match.group(1)}>"
     tags = "|".join(PERSONAL_TAGS)
     return re.sub(rf"<({tags})>([^<]*)</\1>", clear, text, flags=re.IGNORECASE)
@@ -112,7 +126,7 @@ def _variants(secret: str):
 _EQUIPMENT = re.compile(rb"<(Manufacturer|Model|DeviceType|Brand)>[^<]*</\1>")
 
 
-def _search(data: bytes, secrets: set[str]) -> tuple[bytes, int]:
+def _search(data: bytes, secrets: set[str], result: Result) -> bytes:
     """Replace every whole-word occurrence of each secret, and every email address,
     outside the fields that describe equipment."""
     pieces, last = [], 0
@@ -120,17 +134,25 @@ def _search(data: bytes, secrets: set[str]) -> tuple[bytes, int]:
         pieces += [(data[last:match.start()], True), (match.group(0), False)]
         last = match.end()
     pieces.append((data[last:], True))
-    total, out = 0, []
+    out = []
     for piece, searchable in pieces:
-        if searchable:
-            piece, hits = _search_piece(piece, secrets)
-            total += hits
-        out.append(piece)
-    return b"".join(out), total
+        out.append(_search_piece(piece, secrets, result) if searchable else piece)
+    return b"".join(out)
 
 
-def _search_piece(data: bytes, secrets: set[str]) -> tuple[bytes, int]:
-    hits = 0
+def _search_piece(data: bytes, secrets: set[str], result: Result) -> bytes:
+    # Email addresses first, whole, before a name inside one is blanked.
+    for pattern, width in ((EMAIL, 1), (EMAIL_UTF16, 2)):
+        def mask(match, width=width):
+            text = match.group(0)
+            address = text.replace(b"\x00", b"").decode("ascii", "replace")
+            if address.endswith("example.com"):
+                return text
+            result.removed.setdefault(address, "Email")
+            result.places[address] += 1
+            result.found_elsewhere += 1
+            return (b"x" if width == 1 else b"x\x00") * (len(text) // width)
+        data = pattern.sub(mask, data)
     for secret in sorted(secrets, key=len, reverse=True):
         for encoding, form, filler in _variants(secret):
             if encoding.startswith("utf-16"):
@@ -140,16 +162,11 @@ def _search_piece(data: bytes, secrets: set[str]) -> tuple[bytes, int]:
             pattern = re.compile(rb"(?<!" + letter + rb")" + re.escape(form) +
                                  rb"(?!" + letter + rb")")
             data, count = pattern.subn(filler, data)
-            hits += count
-    for pattern, width in ((EMAIL, 1), (EMAIL_UTF16, 2)):
-        def mask(match, width=width):
-            text = match.group(0)
-            if b"example.com" in text.replace(b"\x00", b""):
-                return text
-            return (b"x" if width == 1 else b"x\x00") * (len(text) // width)
-        data, count = pattern.subn(mask, data)
-        hits += count
-    return data, hits
+            if count:
+                result.removed.setdefault(secret, "What you typed")
+                result.places[secret] += count
+                result.found_elsewhere += count
+    return data
 
 
 def make_shareable(source, target, extra: tuple[str, ...] = ()) -> Result:
@@ -163,7 +180,6 @@ def make_shareable(source, target, extra: tuple[str, ...] = ()) -> Result:
     header, payload = _split(raw)
     result = Result()
     secrets = {value.strip() for value in extra if len(value.strip()) >= 3}
-    typed = len(secrets)
 
     archive = None
     if payload.startswith(b"PK\x03\x04"):
@@ -173,8 +189,7 @@ def make_shareable(source, target, extra: tuple[str, ...] = ()) -> Result:
             archive = None
 
     if archive is None:                 # no known locations: the search is all there is
-        cleaned, hits = _search(payload, secrets)
-        result.found_elsewhere = hits
+        cleaned = _search(payload, secrets, result)
     else:
         with archive:
             infos = archive.infolist()
@@ -182,13 +197,12 @@ def make_shareable(source, target, extra: tuple[str, ...] = ()) -> Result:
         for name, data in contents.items():
             if name.lower().endswith((".xml", ".xml.backup")):
                 original = data.decode("utf-8", "replace")
-                text = _structured(original, secrets, result.removed)
+                text = _structured(original, secrets, result)
                 if text != original:
                     contents[name] = text.encode("utf-8")
-        result.known_format = bool(result.removed)
+        result.known_format = any(what in OWNER.values() for what in result.removed.values())
         for name, data in contents.items():
-            contents[name], hits = _search(data, secrets)
-            result.found_elsewhere += hits
+            contents[name] = _search(data, secrets, result)
         out = io.BytesIO()
         with zipfile.ZipFile(out, "w") as copy:
             for info in infos:
@@ -198,12 +212,9 @@ def make_shareable(source, target, extra: tuple[str, ...] = ()) -> Result:
                 copy.writestr(clone, contents[info.filename])
         cleaned = out.getvalue()
 
-    if typed and result.found_elsewhere:
-        result.removed.append("What you typed in")
     header = re.sub(rb"<BINARYDATASIZE>\d+</BINARYDATASIZE>",
                     b"<BINARYDATASIZE>%d</BINARYDATASIZE>" % len(cleaned), header)
     header = re.sub(rb"<CHECKSUM>\d+</CHECKSUM>",
                     b"<CHECKSUM>%d</CHECKSUM>" % checksum(cleaned), header)
     Path(target).write_bytes(header + cleaned)
-    result.removed = sorted(set(result.removed))
     return result
