@@ -54,9 +54,9 @@ pyz = PYZ(analysis.pure)
 
 if sys.platform == "darwin":
     exe = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name="afterglow-dump",
-              console=False, icon=str(BRANDING / "dump-icon.png"))
+              console=False, icon=str(BRANDING / "dump-icon.icns"))
     collected = COLLECT(exe, analysis.binaries, analysis.datas, name="afterglow-dump")
-    app = BUNDLE(collected, name="Afterglow Dump.app", icon=str(BRANDING / "dump-icon.png"),
+    app = BUNDLE(collected, name="Afterglow Dump.app", icon=str(BRANDING / "dump-icon.icns"),
                  bundle_identifier="io.github.harmonic-afterglow.afterglow-dump",
                  version=os.environ.get("AFTERGLOW_DUMP_VERSION", "0.0.0"),
                  info_plist={"NSHighResolutionCapable": True,
