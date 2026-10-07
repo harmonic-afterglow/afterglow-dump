@@ -43,9 +43,10 @@ needs installing.
   1100 it offers to turn on *direct access* the first time: it then talks to the remote
   through a USB driver that comes with Windows, which is faster and more reliable than
   Logitech's. Windows asks for administrator permission once.
-- **macOS** (`afterglow-dump-macos-arm64.zip`, Apple Silicon): unzip it and open the
-  app - no need to move it to Applications. It is not notarized, so the first time
-  macOS refuses: go to System Settings > Privacy & Security and choose Open Anyway.
+- **macOS** (`afterglow-dump-macos-arm64.zip` for Apple Silicon, `-x86_64.zip` for
+  Intel): unzip it and open the app - no need to move it to Applications. It is not
+  notarized, so the first time macOS refuses: go to System Settings > Privacy & Security
+  and choose Open Anyway.
 - **Linux** (`afterglow-dump-linux-x86_64`): make it executable
   (`chmod +x afterglow-dump-linux-x86_64`) and run it. If the remote cannot be opened
   yet, it offers to allow it, which asks for your password once.
