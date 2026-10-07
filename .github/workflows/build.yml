@@ -1,0 +1,171 @@
+# Builds the program for Linux, Windows and macOS with libconcord from Afterglow's fork.
+# A tag (v*) also publishes a release; anything else just keeps the files as artifacts.
+name: Build
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CONCORDANCE_REPO: https://github.com/harmonic-afterglow/concordance
+  CONCORDANCE_REF: usbnet-link
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev]" && ruff check src tests && pytest -q
+
+  linux:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential autoconf \
+            automake libtool pkg-config libusb-1.0-0-dev libzip-dev libcurl4-openssl-dev \
+            libhidapi-dev libegl1 libgl1 libxkbcommon-x11-0 libdbus-1-3
+      - name: Build libconcord
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 --branch "$CONCORDANCE_REF" "$CONCORDANCE_REPO" /tmp/concordance
+          cd /tmp/concordance/libconcord
+          autoreconf --install --force
+          ./configure --prefix=/tmp/libconcord | tee /tmp/configure.log
+          grep -q "over USB (libusb-1.0): yes" /tmp/configure.log
+          make -j"$(nproc)" && make install
+      - name: Build
+        env:
+          AFTERGLOW_DUMP_LIBCONCORD: /tmp/libconcord/lib/libconcord.so.6.0.0
+        run: |
+          pip install . pyinstaller
+          pyinstaller --noconfirm packaging/afterglow-dump.spec
+          cd /tmp && env -i HOME="$HOME" PATH=/usr/bin:/bin \
+            "$GITHUB_WORKSPACE/dist/afterglow-dump" --self-check
+          mv "$GITHUB_WORKSPACE/dist/afterglow-dump" "$GITHUB_WORKSPACE/dist/afterglow-dump-linux-x86_64"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: afterglow-dump-linux-x86_64
+          path: dist/afterglow-dump-linux-x86_64
+          if-no-files-found: error
+
+  windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          path-type: inherit
+          install: >-
+            git base-devel mingw-w64-x86_64-toolchain mingw-w64-x86_64-autotools
+            mingw-w64-x86_64-pkg-config mingw-w64-x86_64-libusb mingw-w64-x86_64-libzip
+            mingw-w64-x86_64-curl mingw-w64-x86_64-hidapi
+      - name: Build libconcord
+        shell: msys2 {0}
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 --branch "$CONCORDANCE_REF" "$CONCORDANCE_REPO" /tmp/concordance
+          cd /tmp/concordance/libconcord
+          autoreconf --install --force
+          ./configure --prefix=/tmp/libconcord | tee /tmp/configure.log
+          grep -q "over USB (libusb-1.0): yes" /tmp/configure.log
+          make -j"$(nproc)" && make install
+          cygpath -w /tmp/libconcord/bin > "$RUNNER_TEMP/libconcord_bin.txt"
+          cygpath -w /mingw64/bin > "$RUNNER_TEMP/mingw_bin.txt"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Build
+        shell: pwsh
+        run: |
+          $bin = (Get-Content "$env:RUNNER_TEMP/libconcord_bin.txt").Trim()
+          $mingw = (Get-Content "$env:RUNNER_TEMP/mingw_bin.txt").Trim()
+          $env:PATH = "$bin;$mingw;$env:PATH"
+          $env:AFTERGLOW_DUMP_LIBCONCORD = Join-Path $bin "libconcord-6.dll"
+          pip install . pyinstaller
+          pyinstaller --noconfirm packaging/afterglow-dump.spec 2>&1 | Tee-Object -Variable log
+          if ($log | Select-String "Library not found: could not resolve") {
+            throw "PyInstaller could not resolve a dependency of libconcord"
+          }
+          $p = Start-Process -FilePath .\dist\afterglow-dump.exe -ArgumentList "--self-check" `
+                             -NoNewWindow -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "self-check failed" }
+          Move-Item dist\afterglow-dump.exe dist\afterglow-dump-windows-x86_64.exe
+      - uses: actions/upload-artifact@v7
+        with:
+          name: afterglow-dump-windows-x86_64
+          path: dist/afterglow-dump-windows-x86_64.exe
+          if-no-files-found: error
+
+  macos:
+    needs: test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - run: brew install autoconf automake libtool pkg-config libusb hidapi libzip
+      - name: Build libconcord
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 --branch "$CONCORDANCE_REF" "$CONCORDANCE_REPO" /tmp/concordance
+          cd /tmp/concordance/libconcord
+          mkdir -p m4 && autoreconf --install --force
+          prefix="$(brew --prefix)"
+          CPPFLAGS="-I$prefix/include" LDFLAGS="-L$prefix/lib" CXXFLAGS="-std=c++11 -O2" \
+            ./configure --prefix=/tmp/libconcord --disable-mime-update | tee /tmp/configure.log
+          grep -q "over USB (libusb-1.0): yes" /tmp/configure.log
+          make -j"$(sysctl -n hw.ncpu)" && make install
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Build
+        env:
+          AFTERGLOW_DUMP_LIBCONCORD: /tmp/libconcord/lib/libconcord.6.dylib
+        run: |
+          set -euxo pipefail
+          export AFTERGLOW_DUMP_VERSION="$(python -c 'import sys; sys.path.insert(0, "src"); import afterglow_dump; print(afterglow_dump.__version__)')"
+          pip install . pyinstaller
+          pyinstaller --noconfirm packaging/afterglow-dump.spec
+          app="dist/Afterglow Dump.app"
+          cd /tmp && env -i HOME="$HOME" PATH=/usr/bin:/bin \
+            "$GITHUB_WORKSPACE/$app/Contents/MacOS/afterglow-dump" --self-check
+          cd "$GITHUB_WORKSPACE"
+          codesign --force --deep --sign - "$app"
+          # A zip, not a disk image: the app is run once, from wherever it was unpacked.
+          # ditto keeps the signature and the bundle's links intact.
+          ditto -c -k --keepParent "$app" dist/afterglow-dump-macos-arm64.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: afterglow-dump-macos-arm64
+          path: dist/afterglow-dump-macos-arm64.zip
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: files
+          merge-multiple: true
+      - run: cd files && sha256sum * > SHA256SUMS
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: files/*
+          prerelease: ${{ contains(github.ref_name, '-') }}

@@ -1,0 +1,8 @@
+__pycache__/
+*.egg-info/
+build/
+dist/
+*.ezhex
+*.EZHex
+.ruff_cache/
+.pytest_cache/

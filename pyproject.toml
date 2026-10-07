@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "afterglow-dump"
+dynamic = ["version"]
+description = "Back up a Logitech Harmony remote, and make a copy safe to share"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+dependencies = ["PyQt6>=6.5"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.5"]
+
+[project.scripts]
+afterglow-dump = "afterglow_dump.__main__:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "afterglow_dump.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+afterglow_dump = ["branding/*"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
